@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  server-monitor-api:
+    build: .
+    container_name: server-monitor-api
+    network_mode: "host"
+    ports:
+      - "9999:9999"
+    restart: unless-stopped
+    command: ["./server-monitor-api", "--port", "9999"]

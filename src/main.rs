@@ -2,6 +2,15 @@ mod system_info;
 
 use actix_web::{get, App, HttpServer, Responder, HttpResponse};
 use system_info::system_info::SystemInfo;
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Args {
+    /// Port to bind the server to
+    #[arg(short, long, default_value_t = 9999)]
+    port: u16,
+}
 
 #[get("/")]
 async fn info() -> impl Responder {
@@ -33,6 +42,8 @@ async fn swap() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let args = Args::parse();
+
     HttpServer::new(|| {
         App::new()
             .service(info)
@@ -41,7 +52,7 @@ async fn main() -> std::io::Result<()> {
             .service(memory)
             .service(swap)
     })
-    .bind(("0.0.0.0", 9999))?
+    .bind(("0.0.0.0", args.port))?
     .run()
     .await
 }
