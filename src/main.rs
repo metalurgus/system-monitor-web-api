@@ -1,8 +1,13 @@
 mod system_info;
 
-use actix_web::{get, App, HttpServer, Responder, HttpResponse};
+use actix_web::{get, web, App, HttpServer, Responder, HttpResponse};
 use system_info::system_info::SystemInfo;
 use clap::Parser;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tokio::time;
+use log::info;
+use chrono::Utc;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -12,41 +17,93 @@ struct Args {
     port: u16,
 }
 
+type SharedInfo = Arc<RwLock<SystemInfo>>;
+
 #[get("/")]
-async fn info() -> impl Responder {
-    let info = SystemInfo::new();
-    HttpResponse::Ok().json(info)
+async fn full(data: web::Data<SharedInfo>) -> impl Responder {
+    let start = Utc::now();
+    info!("{} - / called, about to read SystemInfo", start);
+    let info = data.read().unwrap();
+    let end = Utc::now();
+    info!("{} - / called, SystemInfo read (duration: {} ms)", end, (end - start).num_milliseconds());
+    HttpResponse::Ok().json(&*info)
 }
 
 #[get("/network")]
-async fn network() -> impl Responder {
-    let network_info = SystemInfo::new().networks;
-    HttpResponse::Ok().json(network_info)
+async fn network(data: web::Data<SharedInfo>) -> impl Responder {
+    let start = Utc::now();
+    info!("{} - /network called, about to read SystemInfo", start);
+    let info = data.read().unwrap();
+    let end = Utc::now();
+    info!("{} - /network called, SystemInfo read (duration: {} ms)", end, (end - start).num_milliseconds());
+    HttpResponse::Ok().json(&info.networks)
 }
 
 #[get("/cpu")]
-async fn cpu() -> impl Responder {
-    let cpu_info = SystemInfo::new().cpu;
-    HttpResponse::Ok().json(cpu_info)
+async fn cpu(data: web::Data<SharedInfo>) -> impl Responder {
+    let start = Utc::now();
+    info!("{} - /cpu called, about to read SystemInfo", start);
+    let info = data.read().unwrap();
+    let end = Utc::now();
+    info!("{} - /cpu called, SystemInfo read (duration: {} ms)", end, (end - start).num_milliseconds());
+    HttpResponse::Ok().json(&info.cpu)
 }
+
 #[get("/memory")]
-async fn memory() -> impl Responder {
-    let memory_info = SystemInfo::new().memory;
-    HttpResponse::Ok().json(memory_info)
+async fn memory(data: web::Data<SharedInfo>) -> impl Responder {
+    let start = Utc::now();
+    info!("{} - /memory called, about to read SystemInfo", start);
+    let info = data.read().unwrap();
+    let end = Utc::now();
+    info!("{} - /memory called, SystemInfo read (duration: {} ms)", end, (end - start).num_milliseconds());
+    HttpResponse::Ok().json(&info.memory)
 }
+
 #[get("/swap")]
-async fn swap() -> impl Responder {
-    let swap_info = SystemInfo::new().swap;
-    HttpResponse::Ok().json(swap_info)
+async fn swap(data: web::Data<SharedInfo>) -> impl Responder {
+    let start = Utc::now();
+    info!("{} - /swap called, about to read SystemInfo", start);
+    let info = data.read().unwrap();
+    let end = Utc::now();
+    info!("{} - /swap called, SystemInfo read (duration: {} ms)", end, (end - start).num_milliseconds());
+    HttpResponse::Ok().json(&info.swap)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
 
-    HttpServer::new(|| {
+    let shared_info = Arc::new(RwLock::new(SystemInfo::new()));
+
+    // Spawn background task to refresh SystemInfo every second
+    {
+        let shared_info = Arc::clone(&shared_info);
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let start = Utc::now();
+                info!("{} - Refreshing SystemInfo...", start);
+
+                // Build new SystemInfo outside the lock
+                let new_info = SystemInfo::new();
+
+                // Lock only to swap in the new value
+                let mut info = shared_info.write().unwrap();
+                *info = new_info;
+
+                let end = Utc::now();
+                info!("{} - SystemInfo refreshed (duration: {} ms)", end, (end - start).num_milliseconds());
+            }
+        });
+    }
+
+    HttpServer::new(move || {
         App::new()
-            .service(info)
+            .app_data(web::Data::new(shared_info.clone()))
+            .service(full)
             .service(network)
             .service(cpu)
             .service(memory)
