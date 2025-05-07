@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::time;
 use log::info;
 use chrono::Utc;
+use actix_files::Files;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -19,7 +20,7 @@ struct Args {
 
 type SharedInfo = Arc<RwLock<SystemInfo>>;
 
-#[get("/")]
+#[get("/all")]
 async fn full(data: web::Data<SharedInfo>) -> impl Responder {
     let start = Utc::now();
     info!("{} - / called, about to read SystemInfo", start);
@@ -108,6 +109,7 @@ async fn main() -> std::io::Result<()> {
             .service(cpu)
             .service(memory)
             .service(swap)
+            .service(Files::new("/", "./static").index_file("index.html")) // <-- add this line
     })
     .bind(("0.0.0.0", args.port))?
     .run()

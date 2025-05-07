@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Server Monitor</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+        h2 { margin-top: 2em; }
+        table { border-collapse: collapse; margin-bottom: 1em; }
+        th, td { border: 1px solid #ccc; padding: 0.5em 1em; }
+        th { background: #f0f0f0; }
+        .section { margin-bottom: 2em; }
+        .chart-container { width: 600px; margin-bottom: 2em; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Server Monitor</h1>
+    <div class="chart-container">
+        <h2>CPU Usage (%)</h2>
+        <canvas id="cpuChart"></canvas>
+    </div>
+    <div class="chart-container">
+        <h2>Memory Usage (%)</h2>
+        <canvas id="memoryChart"></canvas>
+    </div>
+    <div class="chart-container">
+        <h2>Swap Usage (%)</h2>
+        <canvas id="swapChart"></canvas>
+    </div>
+    <div class="chart-container">
+        <h2>Network Traffic (RX+TX KB/s per interface)</h2>
+        <canvas id="networkChart"></canvas>
+    </div>
+    <script>
+        // Store chart data
+        const maxPoints = 60;
+        const labels = Array.from({length: maxPoints}, (_, i) => '');
+        const cpuData = Array(maxPoints).fill(null);
+        const memoryData = Array(maxPoints).fill(null);
+        const swapData = Array(maxPoints).fill(null);
+
+        // Create charts
+        const cpuChart = new Chart(document.getElementById('cpuChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'CPU',
+                    data: cpuData,
+                    borderColor: 'blue',
+                    fill: false,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                animation: false,
+                scales: { y: { min: 0, max: 100 } },
+                plugins: { title: { display: false } }
+            }
+        });
+
+        const memoryChart = new Chart(document.getElementById('memoryChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Memory',
+                    data: memoryData,
+                    borderColor: 'green',
+                    fill: false,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                animation: false,
+                scales: { y: { min: 0, max: 100 } },
+                plugins: { title: { display: true, text: '' } }
+            }
+        });
+
+        const swapChart = new Chart(document.getElementById('swapChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Swap',
+                    data: swapData,
+                    borderColor: 'orange',
+                    fill: false,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                animation: false,
+                scales: { y: { min: 0, max: 100 } },
+                plugins: { title: { display: true, text: '' } }
+            }
+        });
+
+        // Network chart setup
+        const networkLabels = Array.from({length: maxPoints}, (_, i) => '');
+        let networkDatasets = [];
+        let prevNetworkStats = {};
+
+        const networkChart = new Chart(document.getElementById('networkChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: networkLabels,
+                datasets: networkDatasets
+            },
+            options: {
+                animation: false,
+                scales: { y: { min: 0 } },
+                plugins: { title: { display: true, text: 'Network Interfaces (KB/s)' } }
+            }
+        });
+
+        // Helper to generate random color for each interface
+        function randomColor() {
+            return `hsl(${Math.floor(Math.random()*360)},70%,50%)`;
+        }
+
+        // Store per-interface history and previous stats
+        const networkHistory = {};
+
+        // Helper to push new data and keep array length
+        function pushData(arr, value) {
+            arr.push(value);
+            if (arr.length > maxPoints) arr.shift();
+        }
+
+        // Fetch and update every second
+        async function updateCharts() {
+            try {
+                const res = await fetch('/all');
+                const data = await res.json();
+
+                // CPU usage (adjust as needed for your API)
+                const cpu = data.cpu && (data.cpu.usage || data.cpu.cpu_usage || data.cpu["CPU Usage"] || 0);
+
+                // Memory usage percent calculation
+                let memory = 0;
+                let memoryText = '';
+                if (data.memory && data.memory.total && data.memory.used) {
+                    memory = (data.memory.used / data.memory.total) * 100;
+                    memoryText = data.memory.text || '';
+                }
+
+                // Swap usage percent calculation
+                let swap = 0;
+                let swapText = '';
+                if (data.swap && data.swap.total && data.swap.used) {
+                    swap = (data.swap.used / data.swap.total) * 100;
+                    swapText = data.swap.text || '';
+                }
+
+                pushData(cpuData, cpu);
+                pushData(memoryData, memory);
+                pushData(swapData, swap);
+
+                // Update chart titles with the "text" field
+                memoryChart.options.plugins.title.text = memoryText;
+                swapChart.options.plugins.title.text = swapText;
+
+                // --- Network ---
+                if (Array.isArray(data.networks)) {
+                    data.networks.forEach((iface) => {
+                        const name = iface.name;
+                        const sent = iface.sent || 0;
+                        const received = iface.received || 0;
+
+                        // Calculate RX+TX delta per second (bytes to KB)
+                        const prev = prevNetworkStats[name] || {sent, received};
+                        const sentDelta = (sent - prev.sent) / 1024;
+                        const receivedDelta = (received - prev.received) / 1024;
+                        const total = sentDelta + receivedDelta;
+
+                        prevNetworkStats[name] = {sent, received};
+
+                        if (!networkHistory[name]) {
+                            networkHistory[name] = Array(maxPoints).fill(null);
+                        }
+                        networkHistory[name].push(total);
+                        if (networkHistory[name].length > maxPoints) networkHistory[name].shift();
+                    });
+
+                    // Update datasets
+                    networkChart.data.datasets = Object.entries(networkHistory).map(([name, arr], i) => ({
+                        label: name,
+                        data: arr,
+                        borderColor: networkChart.data.datasets[i]?.borderColor || randomColor(),
+                        fill: false,
+                        tension: 0.2
+                    }));
+                    networkChart.update();
+                }
+
+                cpuChart.update();
+                memoryChart.update();
+                swapChart.update();
+            } catch (e) {
+                // Optionally handle errors
+            }
+        }
+
+        // Initial update and interval
+        updateCharts();
+        setInterval(updateCharts, 1000);
+    </script>
+</body>
+</html>
