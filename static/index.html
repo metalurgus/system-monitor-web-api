@@ -56,7 +56,7 @@
             options: {
                 animation: false,
                 scales: { y: { min: 0, max: 100 } },
-                plugins: { title: { display: false } }
+                plugins: { title: { display: true, text: '' } }
             }
         });
 
@@ -138,6 +138,10 @@
 
                 // CPU usage (adjust as needed for your API)
                 const cpu = data.cpu && (data.cpu.usage || data.cpu.cpu_usage || data.cpu["CPU Usage"] || 0);
+                let cpuText = '';
+                if (data.cpu && data.cpu.text) {
+                    cpuText = data.cpu.text;
+                }
 
                 // Memory usage percent calculation
                 let memory = 0;
@@ -160,6 +164,7 @@
                 pushData(swapData, swap);
 
                 // Update chart titles with the "text" field
+                cpuChart.options.plugins.title.text = cpuText;
                 memoryChart.options.plugins.title.text = memoryText;
                 swapChart.options.plugins.title.text = swapText;
 
