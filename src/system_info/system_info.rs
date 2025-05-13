@@ -180,13 +180,22 @@ impl SystemInfo {
         networks.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut disks = Vec::new();
+        let mut seen_mounts = std::collections::HashSet::new();
         for disk in system_disks.iter() {
+            let total = disk.total_space();
+            let mount_point = disk.mount_point().to_str().unwrap_or("Unknown").to_string();
+
+            // Skip disks with 0 total space or duplicate mount points
+            if total == 0 || !seen_mounts.insert(mount_point.clone()) {
+                continue;
+            }
+
             let usage = disk.usage();
             let throughput = calc_network_or_disk_usage(usage.written_bytes, usage.read_bytes, elapsed);
             disks.push(Disk {
                 name: disk.name().to_str().unwrap_or("Unknown").to_string(),
-                total: disk.total_space(),
-                used: disk.total_space() - disk.available_space(),
+                total,
+                used: total - disk.available_space(),
                 free: disk.available_space(),
                 utilization: 0.0,
                 throughput,
@@ -194,8 +203,8 @@ impl SystemInfo {
                 write: usage.written_bytes,
                 text: format!("Disk: {}\nTotal: {}\nUsed: {}\nFree: {}\nUsage: {}",
                     disk.name().to_str().unwrap_or("Unknown"),
-                    disk.total_space().auto_size(),
-                    (disk.total_space() - disk.available_space()).auto_size(),
+                    total.auto_size(),
+                    (total - disk.available_space()).auto_size(),
                     disk.available_space().auto_size(),
                     throughput.auto_bits()),
             });

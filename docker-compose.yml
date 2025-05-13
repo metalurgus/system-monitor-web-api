@@ -7,5 +7,7 @@ services:
     network_mode: "host"
     ports:
       - "9999:9999"
+    volumes:
+      - /:/host-root:ro    
     restart: unless-stopped
     command: ["./server-monitor-api", "--port", "9999"]
