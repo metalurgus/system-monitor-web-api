@@ -1,5 +1,5 @@
 use std::time::{Duration, Instant};
-use sysinfo::{Networks, System};
+use sysinfo::{Disks, Networks, System};
 use serde::{Serialize, Deserialize};
 
 const KB: u64 = 1024;
@@ -17,7 +17,7 @@ pub struct Memory {
 #[derive(Serialize, Deserialize)]
 pub struct CPU {
     pub cores: u32,
-    pub usage: f32,
+    pub utilization: f32,
     pub text: String,
 }
 
@@ -28,7 +28,20 @@ pub struct Network {
     pub mac: String,
     pub sent: u64,
     pub received: u64,
-    pub usage: u64,
+    pub throughput: u64,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Disk {
+    pub name: String,
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    pub utilization: f32,
+    pub throughput: u64,
+    pub read: u64,   // cumulative bytes read
+    pub write: u64,  // cumulative bytes written
     pub text: String,
 }
 
@@ -38,6 +51,7 @@ pub struct SystemInfo {
     pub swap: Memory,
     pub cpu: CPU,
     pub networks: Vec<Network>,
+    pub disks: Vec<Disk>,
 }
 
 pub trait ToSize {
@@ -83,7 +97,7 @@ impl ToSize for u64 {
 }
 
 
-fn calc_network_usage(received: u64, transmitted: u64, elapsed_secs: f64) -> u64 {
+fn calc_network_or_disk_usage(received: u64, transmitted: u64, elapsed_secs: f64) -> u64 {
     let total_bits = (received + transmitted) * 8;
     if elapsed_secs > 0.0 {
         (total_bits as f64 / elapsed_secs) as u64
@@ -113,16 +127,18 @@ impl SystemInfo {
 
         let last_refresh = Instant::now();
         let mut network_interfaces = Networks::new_with_refreshed_list();
+        let mut system_disks = Disks::new_with_refreshed_list();
 
         // Wait a bit because CPU usage is based on diff.
         std::thread::sleep(Duration::from_secs(1));
 
         sys.refresh_all();
         network_interfaces.refresh(true);
+        system_disks.refresh(true);
 
         let cpu = CPU {
             cores: sys.cpus().len() as u32,
-            usage: sys.global_cpu_usage(),
+            utilization: sys.global_cpu_usage(),
             text: format!("CPU Usage: {:.2}%", sys.global_cpu_usage()),
         };
 
@@ -142,7 +158,7 @@ impl SystemInfo {
                 .or_else(|| data.ip_networks().iter().find(|ip| ip.addr.is_ipv6()))
                 .map_or_else(|| "Unknown".to_string(), |ip| ip.addr.to_string());
 
-            let usage = calc_network_usage(data.received(), data.transmitted(), elapsed);
+            let throughput = calc_network_or_disk_usage(data.received(), data.transmitted(), elapsed);
 
             networks.push(Network {
                 name: interface_name.clone(),
@@ -150,19 +166,42 @@ impl SystemInfo {
                 mac: data.mac_address().to_string(),
                 sent: data.total_transmitted(),
                 received: data.total_received(),
-                usage,
+                throughput,
                 text: format!("Network: {}\nIP: {}\nMAC: {}\nSent: {}\nReceived: {}\nUsage: {}",
                     interface_name,
                     ip,
                     data.mac_address(),
                     data.total_transmitted().auto_size(),
                     data.total_received().auto_size(),
-                    usage.auto_bits()),
+                    throughput.auto_bits()),
             });
         }
 
         networks.sort_by(|a, b| a.name.cmp(&b.name));
-        SystemInfo { memory, swap, cpu, networks }
+
+        let mut disks = Vec::new();
+        for disk in system_disks.iter() {
+            let usage = disk.usage();
+            let throughput = calc_network_or_disk_usage(usage.written_bytes, usage.read_bytes, elapsed);
+            disks.push(Disk {
+                name: disk.name().to_str().unwrap_or("Unknown").to_string(),
+                total: disk.total_space(),
+                used: disk.total_space() - disk.available_space(),
+                free: disk.available_space(),
+                utilization: 0.0,
+                throughput,
+                read: usage.read_bytes,
+                write: usage.written_bytes,
+                text: format!("Disk: {}\nTotal: {}\nUsed: {}\nFree: {}\nUsage: {}",
+                    disk.name().to_str().unwrap_or("Unknown"),
+                    disk.total_space().auto_size(),
+                    (disk.total_space() - disk.available_space()).auto_size(),
+                    disk.available_space().auto_size(),
+                    throughput.auto_bits()),
+            });
+        }
+
+        SystemInfo { memory, swap, cpu, networks , disks }
     }
 
     pub fn to_string(&self) -> String {
@@ -170,7 +209,7 @@ impl SystemInfo {
         result.push_str(&format!("Memory: {}/{} free\n", self.memory.free.auto_size(), self.memory.total.auto_size()));
         result.push_str(&format!("Swap: {}/{} free\n", self.swap.free.auto_size(), self.swap.total.auto_size()));
         result.push_str(&format!("CPU Cores: {}\n", self.cpu.cores));
-        result.push_str(&format!("CPU Usage: {:.2}%\n", self.cpu.usage));
+        result.push_str(&format!("CPU Usage: {:.2}%\n", self.cpu.utilization));
         for network in &self.networks {
             result.push_str("-----------------------------------------------------\n");
             result.push_str(&format!("Network: {}\n", network.name));
@@ -178,7 +217,16 @@ impl SystemInfo {
             result.push_str(&format!("MAC: {}\n", network.mac));
             result.push_str(&format!("Sent: {}\n", network.sent.auto_size()));
             result.push_str(&format!("Received: {}\n", network.received.auto_size()));
-            result.push_str(&format!("Usage: {}\n", network.usage.auto_bits()));            
+            result.push_str(&format!("Usage: {}\n", network.throughput.auto_bits()));            
+        }
+        result.push_str("-----------------------------------------------------\n");
+        for disk in &self.disks {
+            result.push_str(&format!("Disk: {}\n", disk.name));
+            result.push_str(&format!("Total: {}\n", disk.total.auto_size()));
+            result.push_str(&format!("Used: {}\n", disk.used.auto_size()));
+            result.push_str(&format!("Free: {}\n", disk.free.auto_size()));
+            result.push_str(&format!("Usage: {}\n", disk.throughput.auto_bits()));
+            
         }
         result
     }

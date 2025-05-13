@@ -11,26 +11,89 @@
         th { background: #f0f0f0; }
         .section { margin-bottom: 2em; }
         .chart-container { width: 600px; margin-bottom: 2em; }
+        .charts-flex {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2em;
+            align-items: flex-start;
+        }
+        .chart-container {
+            flex: 1 1 350px;
+            max-width: 600px;
+            min-width: 300px;
+            margin-bottom: 0;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(2, auto);
+            gap: 2em;
+            align-items: start;
+        }
+        .chart-container {
+            min-width: 250px;
+            max-width: 600px;
+            width: 100%;
+            margin-bottom: 0;
+        }
+        /* Place CPU, Memory, Swap on first row */
+        .chart-container.cpu   { grid-column: 1; grid-row: 1; }
+        .chart-container.memory{ grid-column: 2; grid-row: 1; }
+        .chart-container.swap  { grid-column: 3; grid-row: 1; }
+        /* Place Network and Disks on second row */
+        .chart-container.network{ grid-column: 1 / span 2; grid-row: 2; }
+        .chart-container.disks { grid-column: 3; grid-row: 2; }
+        @media (max-width: 1100px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+                grid-template-rows: none;
+            }
+            .chart-container.cpu,
+            .chart-container.memory,
+            .chart-container.swap,
+            .chart-container.network,
+            .chart-container.disks {
+                grid-column: 1 !important;
+                grid-row: auto !important;
+            }
+        }
+        @media (max-width: 1500px) and (min-width: 1101px) {
+            .charts-grid {
+                grid-template-columns: repeat(2, 1fr);
+                grid-template-rows: auto auto auto;
+            }
+            .chart-container.cpu   { grid-column: 1; grid-row: 1; }
+            .chart-container.memory{ grid-column: 2; grid-row: 1; }
+            .chart-container.swap  { grid-column: 1; grid-row: 2; }
+            .chart-container.network{ grid-column: 2; grid-row: 2; }
+            .chart-container.disks { grid-column: 1 / span 2; grid-row: 3; }
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <h1>Server Monitor</h1>
-    <div class="chart-container">
-        <h2>CPU Usage (%)</h2>
-        <canvas id="cpuChart"></canvas>
-    </div>
-    <div class="chart-container">
-        <h2>Memory Usage (%)</h2>
-        <canvas id="memoryChart"></canvas>
-    </div>
-    <div class="chart-container">
-        <h2>Swap Usage (%)</h2>
-        <canvas id="swapChart"></canvas>
-    </div>
-    <div class="chart-container">
-        <h2>Network Traffic (RX+TX KB/s per interface)</h2>
-        <canvas id="networkChart"></canvas>
+    <div class="charts-grid">
+        <div class="chart-container cpu">
+            <h2>CPU Usage (%)</h2>
+            <canvas id="cpuChart"></canvas>
+        </div>
+        <div class="chart-container memory">
+            <h2>Memory Usage (%)</h2>
+            <canvas id="memoryChart"></canvas>
+        </div>
+        <div class="chart-container swap">
+            <h2>Swap Usage (%)</h2>
+            <canvas id="swapChart"></canvas>
+        </div>
+        <div class="chart-container network">
+            <h2>Network Traffic (RX+TX KB/s per interface)</h2>
+            <canvas id="networkChart"></canvas>
+        </div>
+        <div class="chart-container disks">
+            <h2>Disks Usage (Read+Write KB/s per device)</h2>
+            <canvas id="disksChart"></canvas>
+        </div>
     </div>
     <script>
         // Store chart data
@@ -116,13 +179,53 @@
             }
         });
 
+        // Disks chart setup
+        const disksLabels = Array.from({length: maxPoints}, (_, i) => '');
+        let disksDatasets = [];
+        let prevDisksStats = {};
+
+        const disksChart = new Chart(document.getElementById('disksChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: disksLabels,
+                datasets: disksDatasets
+            },
+            options: {
+                animation: false,
+                scales: { y: { min: 0 } },
+                plugins: { title: { display: true, text: 'Disks (KB/s)' } }
+            }
+        });
+
         // Helper to generate random color for each interface
         function randomColor() {
             return `hsl(${Math.floor(Math.random()*360)},70%,50%)`;
         }
 
-        // Store per-interface history and previous stats
+        // Distinct color palette (expand as needed)
+        const palette = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+        ];
+
+        // Assign a color by index or hash
+        function getColor(name, usedColors) {
+            // Try to assign a palette color by index
+            let idx = Object.keys(usedColors).length % palette.length;
+            if (usedColors[name] !== undefined) return usedColors[name];
+            // If already used, find next available
+            while (Object.values(usedColors).includes(palette[idx])) {
+                idx = (idx + 1) % palette.length;
+            }
+            usedColors[name] = palette[idx];
+            return palette[idx];
+        }
+
+        // Store per-interface/device history and previous stats
         const networkHistory = {};
+        const disksHistory = {};
+        const networkColors = {};
+        const disksColors = {};
 
         // Helper to push new data and keep array length
         function pushData(arr, value) {
@@ -137,7 +240,7 @@
                 const data = await res.json();
 
                 // CPU usage (adjust as needed for your API)
-                const cpu = data.cpu && (data.cpu.usage || data.cpu.cpu_usage || data.cpu["CPU Usage"] || 0);
+                const cpu = data.cpu && (data.cpu.utilization || 0);
                 let cpuText = '';
                 if (data.cpu && data.cpu.text) {
                     cpuText = data.cpu.text;
@@ -194,11 +297,44 @@
                     networkChart.data.datasets = Object.entries(networkHistory).map(([name, arr], i) => ({
                         label: name,
                         data: arr,
-                        borderColor: networkChart.data.datasets[i]?.borderColor || randomColor(),
+                        borderColor: getColor(name, networkColors),
                         fill: false,
                         tension: 0.2
                     }));
                     networkChart.update();
+                }
+
+                // --- Disks ---
+                if (Array.isArray(data.disks)) {
+                    data.disks.forEach((disk) => {
+                        const name = disk.name;
+                        const read = disk.read || 0;
+                        const write = disk.write || 0;
+
+                        // Calculate read+write delta per second (bytes to KB)
+                        const prev = prevDisksStats[name] || {read, write};
+                        const readDelta = (read - prev.read) / 1024;
+                        const writeDelta = (write - prev.write) / 1024;
+                        const total = readDelta + writeDelta;
+
+                        prevDisksStats[name] = {read, write};
+
+                        if (!disksHistory[name]) {
+                            disksHistory[name] = Array(maxPoints).fill(null);
+                        }
+                        disksHistory[name].push(total);
+                        if (disksHistory[name].length > maxPoints) disksHistory[name].shift();
+                    });
+
+                    // Update datasets
+                    disksChart.data.datasets = Object.entries(disksHistory).map(([name, arr], i) => ({
+                        label: name,
+                        data: arr,
+                        borderColor: getColor(name, disksColors),
+                        fill: false,
+                        tension: 0.2
+                    }));
+                    disksChart.update();
                 }
 
                 cpuChart.update();
