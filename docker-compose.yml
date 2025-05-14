@@ -6,7 +6,8 @@ services:
     container_name: server-monitor-api
     network_mode: "host"
     pid: "host"                
-    privileged: true           
+    privileged: true    
+    ports:       
       - "9999:9999"
     volumes:
       - /:/host-root:ro    
