@@ -5,7 +5,8 @@ services:
     build: .
     container_name: server-monitor-api
     network_mode: "host"
-    ports:
+    pid: "host"                
+    privileged: true           
       - "9999:9999"
     volumes:
       - /:/host-root:ro    
